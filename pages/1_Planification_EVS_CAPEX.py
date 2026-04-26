@@ -28,6 +28,28 @@ Il permet de:
 L’objectif n’est pas de remplacer l’expertise métier, mais de fournir un support structuré pour orienter les décisions techniques et budgétaires.
 """)
 
+st.markdown("---")
+
+with st.expander("Hypothèses et limites de l’outil"):
+    st.markdown("""
+    Cet outil est un **prototype d’aide à la décision** développé dans le cadre d’un mémoire M2.
+
+    ### Hypothèses principales
+    - Les résultats dépendent directement de la qualité du fichier Excel importé.
+    - Le score EVS est basé sur les données disponibles: âge, année EVS, coût, statut EVS et risque réglementaire estimé.
+    - Les seuils utilisés doivent être validés avec les experts métier Renault.
+    - Les règles internes Renault, les exigences pays et les spécificités constructeur peuvent nécessiter un paramétrage complémentaire.
+
+    ### Limites
+    - L’outil ne remplace pas une expertise technique ou réglementaire.
+    - Les résultats ne constituent pas une décision automatique d’arrêt, de remplacement ou d’intervention.
+    - Les données de pannes, charges réelles, criticité production et historiques détaillés ne sont pas encore intégrées.
+    - Le modèle actuel est une première version destinée à structurer la priorisation EVS.
+
+    ### Utilisation recommandée
+    Les résultats doivent être considérés comme un support de discussion pour orienter les priorités, puis validés par les responsables maintenance, méthodes et sécurité.
+    """)
+
 uploaded_file = st.file_uploader("Importer le fichier Excel CAPEX", type=["xlsx"])
 
 if uploaded_file is not None:
@@ -91,7 +113,6 @@ if uploaded_file is not None:
     )
 
     st.sidebar.header("Réglage des pondérations")
-
     st.sidebar.caption(
         "Les pondérations positives sont normalisées automatiquement pour éviter un score non interprétable."
     )
@@ -382,20 +403,6 @@ if uploaded_file is not None:
     st.info(
         "Les zones les plus claires indiquent une concentration plus élevée de criticité EVS pour un site et une année donnés."
     )
-
-    st.markdown("---")
-    st.subheader("Règles EVS importées")
-
-    try:
-        rules_df = pd.read_excel(uploaded_file, sheet_name="Règles")
-        rules_df = rules_df.dropna(how="all")
-        rules_df.columns = rules_df.columns.astype(str).str.strip()
-
-        st.dataframe(rules_df.astype(str), use_container_width=True)
-
-    except Exception as e:
-        st.warning("La feuille 'Règles' n’a pas pu être importée.")
-        st.write(str(e))
 
     st.markdown("---")
     st.subheader("Moteur de simulation budgétaire EVS")
