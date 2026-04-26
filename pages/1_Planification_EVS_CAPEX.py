@@ -2,14 +2,35 @@ from fpdf import FPDF
 import sys
 import os
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 
+st.set_page_config(
+    page_title="EVS Intelligence Platform",
+    page_icon="🏗️",
+    layout="wide",
+)
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+
+# =========================
+# HEADER
+# =========================
+
 st.title("EVS Intelligence Platform")
-st.caption("Outil d’aide à la décision pour la digitalisation de l’évaluation spéciale des ponts roulants")
+
+st.markdown("""
+### Digitalisation de l’Évaluation Spéciale (EVS) des ponts roulants
+
+**Auteur:** Hassan Attout  
+**Formation:** Master MEE Énergétique, Sorbonne Université  
+**Entreprise:** Renault Group, apprentissage  
+**Contexte:** Moyens de levage / maintenance industrielle  
+""")
+
+st.caption("Outil d’aide à la décision pour la priorisation EVS et l’arbitrage CAPEX")
 
 st.markdown("""
 ## Objectif de l’outil
@@ -26,6 +47,13 @@ Il permet de:
 - générer un rapport PDF exploitable.
 
 L’objectif n’est pas de remplacer l’expertise métier, mais de fournir un support structuré pour orienter les décisions techniques et budgétaires.
+""")
+
+st.warning("""
+Cet outil constitue une aide à la décision.
+
+Les résultats ne remplacent pas une expertise technique ou réglementaire.
+Toute décision doit être validée par les équipes métier compétentes.
 """)
 
 st.markdown("---")
@@ -50,80 +78,205 @@ with st.expander("Hypothèses et limites de l’outil"):
     Les résultats doivent être considérés comme un support de discussion pour orienter les priorités, puis validés par les responsables maintenance, méthodes et sécurité.
     """)
 
+
+# =========================
+# FUNCTIONS
+# =========================
+
+def normalize(series):
+    if series.max() == series.min():
+        return series * 0
+    return (series - series.min()) / (series.max() - series.min())
+
+
+def clean_text(text):
+    return str(text).encode("latin-1", "ignore").decode("latin-1")
+
+
+def find_column(df, candidates):
+    cleaned_cols = {
+        str(col).strip().lower().replace("\n", " "): col
+        for col in df.columns
+    }
+
+    for candidate in candidates:
+        candidate_clean = candidate.lower().replace("\n", " ")
+        for cleaned, original in cleaned_cols.items():
+            if candidate_clean in cleaned:
+                return original
+    return None
+
+
+def parse_evs_flag(x):
+    x = str(x).strip().lower()
+
+    if x in ["n", "non", "no", "0"]:
+        return 1.0
+    elif x in ["o", "oui", "yes", "y", "1"]:
+        return 0.3
+    elif x in ["nc", "na", "nan", "", "none"]:
+        return 0.6
+    else:
+        return 0.6
+
+
+def apply_evs_rules(row):
+    age = row["Age"]
+
+    if age >= 40:
+        return "EVS obligatoire immédiate"
+    elif age >= 35:
+        return "EVS réglementaire prioritaire"
+    elif age >= 30:
+        return "EVS à programmer court terme"
+    elif age >= 25:
+        return "Surveillance renforcée"
+    else:
+        return "Suivi standard"
+
+
+def assign_evs_decision(score):
+    if score >= 0.75:
+        return "EVS prioritaire immédiate"
+    elif score >= 0.55:
+        return "EVS à planifier"
+    elif score >= 0.35:
+        return "Surveillance renforcée"
+    else:
+        return "Suivi standard"
+
+
+def generate_action_plan(row):
+    score = row["priority_score"]
+    regulatory_risk = row["regulatory_risk"]
+
+    if score >= 0.80 or regulatory_risk >= 1.0:
+        return "EVS immédiate + étude remplacement"
+    elif score >= 0.65:
+        return "EVS urgente + maintenance corrective"
+    elif score >= 0.55:
+        return "EVS à planifier court terme"
+    elif score >= 0.35:
+        return "Surveillance + maintenance préventive"
+    else:
+        return "Suivi standard"
+
+
+def generate_deadline(row):
+    score = row["priority_score"]
+    regulatory_risk = row["regulatory_risk"]
+
+    if score >= 0.80 or regulatory_risk >= 1.0:
+        return "0-3 mois"
+    elif score >= 0.65:
+        return "3-6 mois"
+    elif score >= 0.55:
+        return "6-12 mois"
+    elif score >= 0.35:
+        return "12-24 mois"
+    else:
+        return "Routine"
+
+
+def build_budget_selection(sorted_df, budget):
+    selected_projects = []
+    total_cost = 0
+
+    for _, row in sorted_df.iterrows():
+        cost = row["Montant EVS"] if pd.notna(row["Montant EVS"]) else 0
+
+        if total_cost + cost <= budget:
+            selected_projects.append(row)
+            total_cost += cost
+
+    return pd.DataFrame(selected_projects), total_cost
+
+
+# =========================
+# UPLOAD
+# =========================
+
 uploaded_file = st.file_uploader("Importer le fichier Excel CAPEX", type=["xlsx"])
 
 if uploaded_file is not None:
+
     df = pd.read_excel(uploaded_file, sheet_name=0, header=8)
 
     df.columns = df.columns.astype(str).str.strip()
     df = df.dropna(how="all")
-    df = df[df["Pont"].notna()]
 
-    key_cols = [
-        "PAYS",
-        "Site",
-        "Pont",
-        "MES",
-        "Age",
-        "Evaluation Spéciale O/N",
-        "EVS Année",
-    ]
+    site_col = find_column(df, ["site"])
+    pont_col = find_column(df, ["pont"])
+    age_col = find_column(df, ["age"])
+    evs_flag_col = find_column(df, ["evaluation spéciale", "evaluation speciale"])
+    evs_year_col = find_column(df, ["evs année", "evs annee"])
+    cost_col = find_column(df, ["e/s montant", "evs montant", "montant"])
+    country_col = find_column(df, ["pays"])
+    usage_col = find_column(df, ["usage"])
+    type_col = find_column(df, ["type"])
+    roadmap_obs_col = find_column(df, ["obsolescence"])
+    roadmap_sec_col = find_column(df, ["securisation", "sécurisation"])
+    comments_col = find_column(df, ["commentaires"])
 
-    available_cols = [col for col in key_cols if col in df.columns]
+    required_cols = [site_col, pont_col, age_col, evs_year_col]
 
-    cost_col = None
-    for col in df.columns:
-        if "montant" in col.lower():
-            cost_col = col
-            break
+    if any(col is None for col in required_cols):
+        st.error("Le fichier ne contient pas toutes les colonnes nécessaires: Site, Pont, Age, EVS Année.")
+        st.write("Colonnes détectées:")
+        st.write(list(df.columns))
+        st.stop()
 
-    if cost_col is not None:
-        available_cols.append(cost_col)
+    df = df[df[pont_col].notna()]
 
-    clean_df = df[available_cols].copy()
+    clean_df = pd.DataFrame()
+    clean_df["Site"] = df[site_col]
+    clean_df["Pont"] = df[pont_col]
+    clean_df["Age"] = pd.to_numeric(df[age_col], errors="coerce")
+    clean_df["EVS Année"] = pd.to_numeric(df[evs_year_col], errors="coerce")
 
-    clean_df["Age"] = pd.to_numeric(clean_df["Age"], errors="coerce")
-    clean_df["EVS Année"] = pd.to_numeric(clean_df["EVS Année"], errors="coerce")
-
-    if cost_col is not None:
-        clean_df[cost_col] = pd.to_numeric(clean_df[cost_col], errors="coerce")
-    else:
-        clean_df["Montant détecté"] = 0
-        cost_col = "Montant détecté"
+    clean_df["Pays"] = df[country_col] if country_col is not None else "Non renseigné"
+    clean_df["Statut EVS"] = df[evs_flag_col] if evs_flag_col is not None else "NC"
+    clean_df["Montant EVS"] = pd.to_numeric(df[cost_col], errors="coerce") if cost_col is not None else 0
+    clean_df["Usage"] = df[usage_col] if usage_col is not None else "Non renseigné"
+    clean_df["Type"] = df[type_col] if type_col is not None else "Non renseigné"
+    clean_df["Roadmap obsolescence"] = df[roadmap_obs_col] if roadmap_obs_col is not None else ""
+    clean_df["Roadmap sécurisation"] = df[roadmap_sec_col] if roadmap_sec_col is not None else ""
+    clean_df["Commentaires"] = df[comments_col] if comments_col is not None else ""
 
     clean_df = clean_df.dropna(subset=["Age", "EVS Année"])
-    clean_df[cost_col] = clean_df[cost_col].fillna(0).astype(int)
+    clean_df["Montant EVS"] = clean_df["Montant EVS"].fillna(0).astype(int)
 
-    def normalize(series):
-        if series.max() == series.min():
-            return series * 0
-        return (series - series.min()) / (series.max() - series.min())
+    # =========================
+    # SCORING
+    # =========================
 
     clean_df["age_score"] = normalize(clean_df["Age"])
     clean_df["evs_urgency"] = 1 - normalize(clean_df["EVS Année"])
-
-    clean_df["risk_proxy"] = clean_df["Evaluation Spéciale O/N"].apply(
-        lambda x: 1.0 if str(x).strip().upper() == "N" else 0.3
-    )
-
-    clean_df["cost_score"] = normalize(clean_df[cost_col])
+    clean_df["risk_proxy"] = clean_df["Statut EVS"].apply(parse_evs_flag)
+    clean_df["cost_score"] = normalize(clean_df["Montant EVS"])
 
     clean_df["regulatory_risk"] = clean_df["Age"].apply(
         lambda x: 1.0 if x >= 35 else 0.5 if x >= 25 else 0.2
     )
 
-    st.sidebar.header("Réglage des pondérations")
-    st.sidebar.caption(
-        "Les pondérations positives sont normalisées automatiquement pour éviter un score non interprétable."
+    clean_df["roadmap_risk"] = clean_df.apply(
+        lambda row: 1.0 if str(row["Roadmap sécurisation"]).strip() not in ["", "nan", "None"]
+        else 0.7 if str(row["Roadmap obsolescence"]).strip() not in ["", "nan", "None"]
+        else 0.0,
+        axis=1
     )
+
+    st.sidebar.header("Réglage des pondérations")
+    st.sidebar.caption("Les pondérations positives sont normalisées automatiquement.")
 
     w_age = st.sidebar.slider("Poids âge", 0.0, 1.0, 0.25, 0.05)
     w_evs = st.sidebar.slider("Poids urgence EVS", 0.0, 1.0, 0.25, 0.05)
-    w_risk = st.sidebar.slider("Poids risque proxy", 0.0, 1.0, 0.20, 0.05)
-    w_reg = st.sidebar.slider("Poids risque réglementaire", 0.0, 1.0, 0.30, 0.05)
+    w_risk = st.sidebar.slider("Poids risque proxy", 0.0, 1.0, 0.15, 0.05)
+    w_reg = st.sidebar.slider("Poids risque réglementaire", 0.0, 1.0, 0.25, 0.05)
+    w_roadmap = st.sidebar.slider("Poids roadmap", 0.0, 1.0, 0.10, 0.05)
     w_cost = st.sidebar.slider("Poids coût pénalisant", 0.0, 0.5, 0.10, 0.05)
 
-    positive_weight_sum = w_age + w_evs + w_risk + w_reg
+    positive_weight_sum = w_age + w_evs + w_risk + w_reg + w_roadmap
 
     if positive_weight_sum == 0:
         st.error("Les pondérations positives ne peuvent pas toutes être nulles.")
@@ -133,90 +286,16 @@ if uploaded_file is not None:
     normalized_evs = w_evs / positive_weight_sum
     normalized_risk = w_risk / positive_weight_sum
     normalized_reg = w_reg / positive_weight_sum
+    normalized_roadmap = w_roadmap / positive_weight_sum
 
     clean_df["priority_score"] = (
         normalized_age * clean_df["age_score"]
         + normalized_evs * clean_df["evs_urgency"]
         + normalized_risk * clean_df["risk_proxy"]
         + normalized_reg * clean_df["regulatory_risk"]
+        + normalized_roadmap * clean_df["roadmap_risk"]
         - w_cost * clean_df["cost_score"]
     ).clip(lower=0, upper=1).round(2)
-
-    with st.expander("Méthodologie du score EVS"):
-        st.markdown(f"""
-        Le score de priorité EVS est calculé à partir d’une combinaison pondérée de plusieurs critères:
-
-        - **Âge de l’équipement**: proxy de vieillissement mécanique.
-        - **Urgence EVS**: proximité de l’échéance d’évaluation spéciale.
-        - **Risque proxy**: information issue du statut EVS.
-        - **Risque réglementaire**: niveau de criticité lié à l’âge.
-        - **Coût estimé**: pénalité économique afin d’intégrer la contrainte CAPEX.
-
-        Les pondérations positives sont normalisées automatiquement afin de maintenir le score entre 0 et 1.
-
-        **Pondérations normalisées utilisées:**
-        - Âge: {normalized_age:.2f}
-        - Urgence EVS: {normalized_evs:.2f}
-        - Risque proxy: {normalized_risk:.2f}
-        - Risque réglementaire: {normalized_reg:.2f}
-        - Pénalité coût: {w_cost:.2f}
-
-        **Limite importante:** ce score constitue une aide à la décision. Il doit être validé par l’expertise métier, notamment pour les équipements très critiques.
-        """)
-
-    def apply_evs_rules(row):
-        age = row["Age"]
-
-        if age >= 40:
-            return "EVS obligatoire immédiate"
-        elif age >= 35:
-            return "EVS réglementaire prioritaire"
-        elif age >= 30:
-            return "EVS à programmer court terme"
-        elif age >= 25:
-            return "Surveillance renforcée"
-        else:
-            return "Suivi standard"
-
-    def assign_evs_decision(score):
-        if score >= 0.75:
-            return "EVS prioritaire immédiate"
-        elif score >= 0.55:
-            return "EVS à planifier"
-        elif score >= 0.35:
-            return "Surveillance renforcée"
-        else:
-            return "Suivi standard"
-
-    def generate_action_plan(row):
-        score = row["priority_score"]
-        regulatory_risk = row["regulatory_risk"]
-
-        if score >= 0.80 or regulatory_risk >= 1.0:
-            return "EVS immédiate + étude remplacement"
-        elif score >= 0.65:
-            return "EVS urgente + maintenance corrective"
-        elif score >= 0.55:
-            return "EVS à planifier court terme"
-        elif score >= 0.35:
-            return "Surveillance + maintenance préventive"
-        else:
-            return "Suivi standard"
-
-    def generate_deadline(row):
-        score = row["priority_score"]
-        regulatory_risk = row["regulatory_risk"]
-
-        if score >= 0.80 or regulatory_risk >= 1.0:
-            return "0-3 mois"
-        elif score >= 0.65:
-            return "3-6 mois"
-        elif score >= 0.55:
-            return "6-12 mois"
-        elif score >= 0.35:
-            return "12-24 mois"
-        else:
-            return "Routine"
 
     clean_df["Décision règle EVS"] = clean_df.apply(apply_evs_rules, axis=1)
     clean_df["Décision score"] = clean_df["priority_score"].apply(assign_evs_decision)
@@ -226,21 +305,61 @@ if uploaded_file is not None:
     clean_df["Risque report 1 an"] = (clean_df["priority_score"] * 1.15).clip(upper=1).round(2)
     clean_df["Risque report 2 ans"] = (clean_df["priority_score"] * 1.30).clip(upper=1).round(2)
 
+    # =========================
+    # METHODOLOGY
+    # =========================
+
+    with st.expander("Méthodologie du score EVS"):
+        st.markdown(f"""
+        Le score de priorité EVS est calculé à partir d’une combinaison pondérée de plusieurs critères:
+
+        - **Âge de l’équipement**: proxy de vieillissement mécanique.
+        - **Urgence EVS**: proximité de l’échéance d’évaluation spéciale.
+        - **Risque proxy**: information issue du statut EVS.
+        - **Risque réglementaire**: criticité liée à l’âge.
+        - **Roadmap obsolescence / sécurisation**: prise en compte d’informations complémentaires du fichier.
+        - **Coût estimé**: pénalité économique afin d’intégrer la contrainte CAPEX.
+
+        **Pondérations normalisées utilisées:**
+        - Âge: {normalized_age:.2f}
+        - Urgence EVS: {normalized_evs:.2f}
+        - Risque proxy: {normalized_risk:.2f}
+        - Risque réglementaire: {normalized_reg:.2f}
+        - Roadmap: {normalized_roadmap:.2f}
+        - Pénalité coût: {w_cost:.2f}
+
+        **Limite importante:** ce score constitue une aide à la décision. Il doit être validé par l’expertise métier Renault.
+        """)
+
+    # =========================
+    # KPI
+    # =========================
+
     total_assets = len(clean_df)
     avg_priority = round(clean_df["priority_score"].mean(), 2)
     urgent_assets = len(clean_df[clean_df["priority_score"] >= 0.75])
     high_regulatory_assets = len(clean_df[clean_df["regulatory_risk"] >= 1.0])
-    total_budget_estimate = int(clean_df[cost_col].sum())
+    total_budget_estimate = int(clean_df["Montant EVS"].sum())
+    critical_budget = int(clean_df[clean_df["priority_score"] >= 0.75]["Montant EVS"].sum())
 
-    critical_df = clean_df[clean_df["priority_score"] >= 0.75]
-    critical_budget = int(critical_df[cost_col].sum())
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Équipements analysés", total_assets)
+    col2.metric("Score moyen", avg_priority)
+    col3.metric("EVS critiques", urgent_assets)
+    col4.metric("Risque réglementaire élevé", high_regulatory_assets)
+
+    st.metric("Budget total estimé", f"{total_budget_estimate:,.0f} €")
+
+    # =========================
+    # SITE ANALYSIS
+    # =========================
 
     site_summary = clean_df.groupby("Site").agg(
         nombre_equipements=("Pont", "count"),
         age_moyen=("Age", "mean"),
         score_moyen=("priority_score", "mean"),
         risque_reglementaire_moyen=("regulatory_risk", "mean"),
-        budget_total=(cost_col, "sum")
+        budget_total=("Montant EVS", "sum")
     ).reset_index()
 
     site_summary["age_moyen"] = site_summary["age_moyen"].round(1)
@@ -251,7 +370,7 @@ if uploaded_file is not None:
     site_ranking = clean_df.groupby("Site").agg(
         score_moyen=("priority_score", "mean"),
         risque_reglementaire=("regulatory_risk", "mean"),
-        budget_total=(cost_col, "sum")
+        budget_total=("Montant EVS", "sum")
     ).reset_index()
 
     site_ranking["criticite"] = (
@@ -265,12 +384,9 @@ if uploaded_file is not None:
 
     top_site = site_ranking.sort_values(by="criticite", ascending=False).iloc[0]["Site"]
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    col1.metric("Équipements analysés", total_assets)
-    col2.metric("Score moyen", avg_priority)
-    col3.metric("EVS critiques", urgent_assets)
-    col4.metric("Risque réglementaire élevé", high_regulatory_assets)
-    col5.metric("Budget total estimé", f"{total_budget_estimate:,} €")
+    # =========================
+    # EXECUTIVE SUMMARY
+    # =========================
 
     st.markdown("## Synthèse décisionnelle")
 
@@ -279,46 +395,63 @@ if uploaded_file is not None:
 
     - **{urgent_assets}** équipements dépassent le seuil critique de priorité EVS.
     - **{high_regulatory_assets}** équipements présentent un risque réglementaire élevé.
-    - Le budget total estimé du périmètre analysé est de **{total_budget_estimate:,} €**.
-    - Le budget nécessaire pour couvrir uniquement les équipements critiques est estimé à **{critical_budget:,} €**.
+    - Le budget total estimé du périmètre analysé est de **{total_budget_estimate:,.0f} €**.
+    - Le budget nécessaire pour couvrir uniquement les équipements critiques est estimé à **{critical_budget:,.0f} €**.
 
     **Décision recommandée:** concentrer l’analyse technique sur les équipements critiques et arbitrer le budget CAPEX à partir des sites les plus exposés.
     """)
+
+    # =========================
+    # ALERT PANEL
+    # =========================
+
+    st.markdown("## Alertes critiques")
+
+    critical_assets = clean_df[
+        (clean_df["priority_score"] >= 0.80)
+        | (clean_df["regulatory_risk"] >= 1.0)
+        | (clean_df["roadmap_risk"] >= 1.0)
+    ].sort_values(by="priority_score", ascending=False)
 
     display_cols = [
         "Site",
         "Pont",
         "Age",
         "EVS Année",
-        cost_col,
+        "Montant EVS",
+        "Usage",
+        "Type",
         "regulatory_risk",
-        "Décision règle EVS",
+        "roadmap_risk",
         "priority_score",
+        "Décision règle EVS",
         "Décision score",
         "Plan d’action",
         "Délai recommandé",
     ]
 
+    if len(critical_assets) > 0:
+        st.error(f"{len(critical_assets)} équipements critiques nécessitent une analyse prioritaire.")
+        st.dataframe(critical_assets[display_cols].head(15), use_container_width=True)
+    else:
+        st.success("Aucune situation critique détectée avec les paramètres actuels.")
+
+    # =========================
+    # MAIN TABLES
+    # =========================
+
     st.subheader("Top équipements prioritaires")
-
     top_assets = clean_df.sort_values(by="priority_score", ascending=False).head(15)
-
-    st.error("Les équipements ci-dessous concentrent les niveaux de priorité les plus élevés.")
     st.dataframe(top_assets[display_cols], use_container_width=True)
 
     st.subheader("Tableau de bord multi-sites")
-    st.dataframe(
-        site_summary.sort_values(by="score_moyen", ascending=False),
-        use_container_width=True
-    )
+    st.dataframe(site_summary.sort_values(by="score_moyen", ascending=False), use_container_width=True)
 
     st.subheader("Classement stratégique des sites critiques")
-    st.dataframe(
-        site_ranking.sort_values(by="criticite", ascending=False),
-        use_container_width=True
-    )
+    st.dataframe(site_ranking.sort_values(by="criticite", ascending=False), use_container_width=True)
 
     st.subheader("Impact du report EVS")
+    st.info("Cette simulation estime l’évolution du risque si l’intervention EVS est repoussée d’un ou deux ans.")
 
     delay_cols = [
         "Site",
@@ -330,14 +463,14 @@ if uploaded_file is not None:
         "Plan d’action",
     ]
 
-    st.info(
-        "Cette simulation estime l’évolution du risque si l’intervention EVS est repoussée d’un ou deux ans."
-    )
-
     st.dataframe(
         clean_df.sort_values(by="Risque report 2 ans", ascending=False)[delay_cols].head(15),
         use_container_width=True
     )
+
+    # =========================
+    # ROADMAP
+    # =========================
 
     st.subheader("Roadmap stratégique EVS")
 
@@ -346,7 +479,7 @@ if uploaded_file is not None:
 
     timeline_summary = timeline_df.groupby("Année action").agg(
         nb_equipements=("Pont", "count"),
-        budget_total=(cost_col, "sum"),
+        budget_total=("Montant EVS", "sum"),
         score_moyen=("priority_score", "mean"),
         risque_reglementaire_moyen=("regulatory_risk", "mean")
     ).reset_index()
@@ -356,10 +489,7 @@ if uploaded_file is not None:
     timeline_summary["risque_reglementaire_moyen"] = timeline_summary["risque_reglementaire_moyen"].round(2)
     timeline_summary["budget_total"] = timeline_summary["budget_total"].astype(int)
 
-    st.dataframe(
-        timeline_summary.sort_values(by="Année action"),
-        use_container_width=True
-    )
+    st.dataframe(timeline_summary.sort_values(by="Année action"), use_container_width=True)
 
     st.subheader("Projection budgétaire EVS par année")
     st.line_chart(
@@ -370,6 +500,10 @@ if uploaded_file is not None:
     st.line_chart(
         timeline_summary.sort_values(by="Année action").set_index("Année action")["risque_reglementaire_moyen"]
     )
+
+    # =========================
+    # HEATMAP
+    # =========================
 
     st.subheader("Heatmap EVS: site vs année")
 
@@ -383,7 +517,7 @@ if uploaded_file is not None:
         values="score_moyen"
     ).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(14, 6))
     cax = ax.imshow(heatmap_pivot, aspect="auto")
 
     ax.set_xticks(range(len(heatmap_pivot.columns)))
@@ -397,34 +531,28 @@ if uploaded_file is not None:
     ax.set_title("Intensité moyenne du score EVS par site et par année")
 
     fig.colorbar(cax, ax=ax, label="Score moyen EVS")
-
     st.pyplot(fig)
 
-    st.info(
-        "Les zones les plus claires indiquent une concentration plus élevée de criticité EVS pour un site et une année donnés."
-    )
+    st.info("Les zones les plus claires indiquent une concentration plus élevée de criticité EVS pour un site et une année donnés.")
+
+    # =========================
+    # BUDGET SIMULATION
+    # =========================
 
     st.markdown("---")
     st.subheader("Moteur de simulation budgétaire EVS")
 
     budget = st.slider(
         "Budget disponible (€)",
-        100000, 2000000, 500000, step=50000
+        100000,
+        2000000,
+        500000,
+        step=50000
     )
 
     sorted_df = clean_df.sort_values(by="priority_score", ascending=False)
 
-    selected_projects = []
-    total_cost = 0
-
-    for _, row in sorted_df.iterrows():
-        cost = row[cost_col] if pd.notna(row[cost_col]) else 0
-
-        if total_cost + cost <= budget:
-            selected_projects.append(row)
-            total_cost += cost
-
-    selected_df = pd.DataFrame(selected_projects)
+    selected_df, total_cost = build_budget_selection(sorted_df, budget)
 
     treated_assets = len(selected_df)
     treated_ratio = round((treated_assets / total_assets) * 100, 1) if total_assets > 0 else 0
@@ -441,18 +569,11 @@ if uploaded_file is not None:
         st.subheader("Comparaison rapide de scénarios budgétaires")
 
         scenario_budgets = [500000, 1000000, 1500000]
-
         scenario_results = []
 
         for scenario_budget in scenario_budgets:
-            scenario_cost = 0
-            scenario_count = 0
-
-            for _, row in sorted_df.iterrows():
-                cost = row[cost_col] if pd.notna(row[cost_col]) else 0
-                if scenario_cost + cost <= scenario_budget:
-                    scenario_cost += cost
-                    scenario_count += 1
+            scenario_selected_df, scenario_cost = build_budget_selection(sorted_df, scenario_budget)
+            scenario_count = len(scenario_selected_df)
 
             scenario_results.append({
                 "Budget scénario": scenario_budget,
@@ -463,21 +584,31 @@ if uploaded_file is not None:
 
         st.dataframe(pd.DataFrame(scenario_results), use_container_width=True)
 
+        # =========================
+        # PDF
+        # =========================
+
         st.markdown("---")
         st.subheader("Télécharger rapport PDF")
-
-        def clean_text(text):
-            return str(text).encode("latin-1", "ignore").decode("latin-1")
 
         def generate_pdf_report():
             pdf = FPDF()
             pdf.add_page()
+
             pdf.set_font("Arial", "B", 14)
             pdf.cell(0, 10, "Rapport EVS", ln=True)
 
             pdf.set_font("Arial", "", 10)
-            pdf.cell(0, 8, f"Budget: {int(total_cost)} / {budget} EUR", ln=True)
+            pdf.cell(0, 8, "Auteur: Hassan Attout", ln=True)
+            pdf.cell(0, 8, "Master MEE Energetique, Sorbonne Universite", ln=True)
+            pdf.cell(0, 8, "Renault Group, moyens de levage", ln=True)
+            pdf.cell(0, 8, "Copyright 2026 Hassan Attout", ln=True)
+
+            pdf.ln(4)
+
+            pdf.cell(0, 8, f"Budget utilise: {int(total_cost)} / {budget} EUR", ln=True)
             pdf.cell(0, 8, f"Nombre equipements selectionnes: {len(selected_df)}", ln=True)
+
             pdf.ln(4)
 
             pdf.set_font("Arial", "B", 11)
@@ -494,6 +625,7 @@ if uploaded_file is not None:
                     f"Le budget total estime est de {total_budget_estimate} EUR."
                 )
             )
+
             pdf.ln(4)
 
             top5 = selected_df.sort_values(by="priority_score", ascending=False).head(5)
@@ -532,17 +664,30 @@ if uploaded_file is not None:
             pdf.cell(0, 8, "Equipements selectionnes", ln=True)
 
             pdf.set_font("Arial", "", 10)
-
             for _, row in selected_df.iterrows():
                 pdf.cell(0, 6, clean_text(f"{row['Pont']} - {row['Site']}"), ln=True)
-                pdf.multi_cell(0, 5, clean_text(
-                    f"Age: {row['Age']} | EVS: {row['EVS Année']} | Score: {row['priority_score']}\n"
-                    f"Risque reglementaire: {row['regulatory_risk']}\n"
-                    f"Regle EVS: {row['Décision règle EVS']}\n"
-                    f"Decision: {row['Décision score']}\n"
-                    f"Action: {row['Plan d’action']} | Delai: {row['Délai recommandé']}"
-                ))
+                pdf.multi_cell(
+                    0,
+                    5,
+                    clean_text(
+                        f"Age: {row['Age']} | EVS: {row['EVS Année']} | Score: {row['priority_score']}\n"
+                        f"Risque reglementaire: {row['regulatory_risk']}\n"
+                        f"Decision: {row['Décision score']}\n"
+                        f"Action: {row['Plan d’action']} | Delai: {row['Délai recommandé']}"
+                    )
+                )
                 pdf.ln(2)
+
+            pdf.ln(4)
+            pdf.set_font("Arial", "I", 8)
+            pdf.multi_cell(
+                0,
+                4,
+                clean_text(
+                    "Ce rapport est genere automatiquement par EVS Intelligence Platform. "
+                    "Il constitue une aide a la decision et ne remplace pas une expertise technique ou reglementaire."
+                )
+            )
 
             return bytes(pdf.output(dest="S"))
 
@@ -560,3 +705,11 @@ if uploaded_file is not None:
 
 else:
     st.info("Importer le fichier Excel pour commencer.")
+
+
+# =========================
+# FOOTER
+# =========================
+
+st.markdown("---")
+st.caption("© 2026 Hassan Attout, EVS Intelligence Platform, Projet M2")
