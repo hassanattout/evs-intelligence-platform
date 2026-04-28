@@ -124,15 +124,13 @@ def apply_evs_rules(row):
     age = row["Age"]
 
     if age >= 40:
-        return "EVS obligatoire immédiate"
+        return "EVS obligatoire"
     elif age >= 35:
-        return "EVS réglementaire prioritaire"
+        return "EVS à programmer (budgétaire/opérationnel)"
     elif age >= 30:
-        return "EVS à programmer court terme"
-    elif age >= 25:
-        return "Surveillance renforcée"
+        return "Première estimation"
     else:
-        return "Suivi standard"
+        return "Suivi standard (sauf cas particulier)"
 
 
 def assign_evs_decision(score):
