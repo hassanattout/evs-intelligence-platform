@@ -183,9 +183,9 @@ def apply_evs_rules(row):
     elif age >= 35:
         return "EVS à programmer"
     elif age >= 30:
-        return "Première estimation"
+        return "Première estimation (budgétaire/opérationnelle)"
     else:
-        return "Suivi standard"
+        return "Suivi standard (sauf cas particulier)"
 
 
 def assign_evs_decision(score):
